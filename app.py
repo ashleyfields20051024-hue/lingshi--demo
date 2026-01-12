@@ -137,8 +137,27 @@ with st.sidebar:
     )
     
     st.markdown("---")
-    api_key = st.text_input("DeepSeek Key", type="password")
     
+    # === 关键修改：智能兼容模式 ===
+    # 初始化 api_key 为空
+    api_key = ""
+    
+    # 1. 尝试从云端/本地秘密里拿 Key (加了 try-except 就不怕报错了)
+    try:
+        if "DEEPSEEK_API_KEY" in st.secrets:
+            api_key = st.secrets["DEEPSEEK_API_KEY"]
+            st.success("✅ License Active (Sponsor Mode)") 
+    except Exception:
+        # 如果本地没有配置 secrets.toml，这里会报错，但我们用 pass 跳过，假装无事发生
+        pass
+
+    # 2. 如果上面没拿到 Key（说明是在本地，或者云端没配好），显示输入框
+    if not api_key:
+        api_key = st.text_input("DeepSeek Key", type="password")
+        if not api_key:
+            st.info("请输入 Key 开始使用")
+    
+    # 重置按钮
     if st.button("🔄 Reset / 重置"):
         st.session_state.messages = []
         st.session_state.blueprint = None

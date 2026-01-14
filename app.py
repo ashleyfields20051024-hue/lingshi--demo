@@ -99,27 +99,28 @@ class EngineeringSpec(BaseModel):
 # ==========================================
 STATE_TOKEN = "[STATE: ALIGNED]"
 
-def get_system_prompt(phase):
-    base_prompt = (
-        "You are 'Lingshi' (Spirit & Insight), a Venture Builder AI focused on AI Safety. "
-        "Your goal is to elicit system constraints before architecting solutions. "
-        "Reply strictly in ENGLISH."
-    )
+def get_system_prompt(phase, language_mode):
+    is_chinese = "Chinese" in language_mode
+    if is_chinese:
+        base_prompt = "你是'灵识'，一个专注于 AI 安全的技术产品经理。你的目标是在构建方案前引导用户对齐系统约束。请用中文回复。"
+    else:
+        base_prompt = "You are 'Lingshi' (Spirit & Insight), a Venture Builder AI focused on AI Safety. Your goal is to elicit system constraints before architecting solutions. Reply strictly in ENGLISH."
     
     if phase == "clarifying":
-        return (
-            f"{base_prompt}\n\n"
-            "PHASE: AMBIGUITY CHECK.\n"
+        instruction = (
+            "\n\nPHASE: AMBIGUITY CHECK.\n"
             "1. Analyze if the user's problem description is specific enough for engineering.\n"
             "2. If vague, REFUSE to provide a solution. Instead, ask 2-3 targeted multiple-choice questions.\n"
             "3. ONLY when you have sufficient information, append the exact token '{STATE_TOKEN}' at the very end of your message."
         )
+        return base_prompt + instruction
     else:
-        return f"{base_prompt}\n\nPHASE: ALIGNMENT REACHED. Acknowledge the alignment and wait for the user to trigger generation."
+        instruction = "\n\nPHASE: ALIGNMENT REACHED. Acknowledge the alignment and wait for the user to trigger generation."
+        return base_prompt + instruction
 
-def get_chat_response(history, api_key, current_phase):
+def get_chat_response(history, api_key, current_phase, language_mode):
     client = openai.OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
-    sys_prompt = get_system_prompt(current_phase)
+    sys_prompt = get_system_prompt(current_phase, language_mode)
     messages = [{"role": "system", "content": sys_prompt}]
     for msg in history:
         messages.append({"role": msg["role"], "content": msg["content"]})
@@ -135,9 +136,11 @@ def get_chat_response(history, api_key, current_phase):
         
     return content, new_phase
 
-def generate_blueprint(history, api_key):
+def generate_blueprint(history, api_key, language_mode):
     client = instructor.from_openai(openai.OpenAI(api_key=api_key, base_url="https://api.deepseek.com"), mode=instructor.Mode.JSON)
-    system_prompt = "You are the Engineering Brain of Lingshi. Generate a deep technical blueprint based on the aligned constraints. Output in ENGLISH."
+    is_chinese = "Chinese" in language_mode
+    lang_instruction = "输出中文。" if is_chinese else "Output in ENGLISH."
+    system_prompt = f"You are the Engineering Brain of Lingshi. Generate a deep technical blueprint based on the aligned constraints. {lang_instruction}"
     messages = [{"role": "system", "content": system_prompt}]
     for msg in history:
         messages.append({"role": msg["role"], "content": msg["content"]})
@@ -199,6 +202,7 @@ def restore_project(project_data):
 with st.sidebar:
     st.title("🛡️ Lingshi Protocol")
     st.caption("v4.2 Robust MATS Edition")
+    language_mode = st.radio("Interface Language", ["Chinese (中文模式)", "English for Investors"])
     st.markdown("---")
     
     # API Key
@@ -244,7 +248,8 @@ col_chat, col_blue = st.columns([3, 2], gap="large")
 with col_chat:
     # Chat History
     if not st.session_state.messages:
-        st.session_state.messages.append({"role": "assistant", "content": "Hello, I am Lingshi. Please describe the problem or system you wish to architect."})
+        welcome_msg = "你好，我是灵识。请描述你观察到的问题或想要构建的系统。" if "Chinese" in language_mode else "Hello, I am Lingshi. Please describe the problem or system you wish to architect."
+        st.session_state.messages.append({"role": "assistant", "content": welcome_msg})
     
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]): st.markdown(msg["content"])
@@ -258,8 +263,8 @@ with col_chat:
     if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
         if api_key:
             with st.chat_message("assistant"):
-                with st.spinner("Analyzing constraints..."):
-                    resp, next_phase = get_chat_response(st.session_state.messages, api_key, st.session_state.conversation_phase)
+                with st.spinner("Analyzing constraints..." if "English" in language_mode else "正在分析约束..."):
+                    resp, next_phase = get_chat_response(st.session_state.messages, api_key, st.session_state.conversation_phase, language_mode)
                     st.markdown(resp)
                     st.session_state.messages.append({"role": "assistant", "content": resp})
                     if next_phase != st.session_state.conversation_phase:
@@ -280,9 +285,9 @@ with col_blue:
             st.rerun()
     else:
         if st.button("✨ Generate Blueprint", type="primary", use_container_width=True):
-            with st.spinner("Architecting solution..."):
+            with st.spinner("Architecting solution..." if "English" in language_mode else "正在构建方案..."):
                 try:
-                    bp = generate_blueprint(st.session_state.messages, api_key)
+                    bp = generate_blueprint(st.session_state.messages, api_key, language_mode)
                     st.session_state.blueprint = bp
                     if save_blueprint_to_supabase(bp, st.session_state.messages):
                         st.toast("✅ Asset Minted & Saved on Protocol!")

@@ -49,30 +49,24 @@ st.markdown("""
 # ==========================================
 # 2. Supabase 连接初始化 (官方库方式)
 # ==========================================
-@st.cache_resource
-def init_supabase():
-    """Initialize Supabase client with simplified secret retrieval"""
-    try:
-        # 最直接的读取方式
-        url = st.secrets.get("SUPABASE_URL")
-        key = st.secrets.get("SUPABASE_KEY")
-        
-        # 备选读取方式 (兼容旧格式)
-        if not url:
-            url = st.secrets.get("supabase", {}).get("url")
-        if not key:
-            key = st.secrets.get("supabase", {}).get("key")
-            
-        if not url or not key:
-            st.error(f"❌ Credentials Missing. Found keys: {list(st.secrets.keys())}")
+def get_supabase_client():
+    """Get Supabase client from secrets or session state fallback"""
+    # 1. 尝试从 Secrets 读取
+    url = st.secrets.get("SUPABASE_URL") or st.secrets.get("supabase", {}).get("url")
+    key = st.secrets.get("SUPABASE_KEY") or st.secrets.get("supabase", {}).get("key")
+    
+    # 2. 尝试从 Session State 读取 (手动输入备份)
+    if not url: url = st.session_state.get("manual_supabase_url")
+    if not key: key = st.session_state.get("manual_supabase_key")
+    
+    if url and key:
+        try:
+            return create_client(url, key)
+        except:
             return None
-            
-        return create_client(url, key)
-    except Exception as e:
-        st.error(f"⚠️ Supabase Connection Error: {str(e)}")
-        return None
+    return None
 
-supabase: Client = init_supabase()
+supabase = get_supabase_client()
 
 # ==========================================
 # 3. 深度架构模型
@@ -165,14 +159,30 @@ with st.sidebar:
     st.title("🌿 Lingshi Protocol")
     language_mode = st.radio("Interface Language", ["Chinese (中文模式)", "English for Investors"])
     st.markdown("---")
+    
+    # API Key 配置
     api_key = st.secrets.get("DEEPSEEK_API_KEY", "")
     if not api_key: api_key = st.text_input("DeepSeek Key", type="password")
+    
+    # Supabase 手动备份配置 (仅在 Secrets 失效时显示)
+    if not supabase:
+        st.warning("🔑 Supabase Connection Required")
+        st.session_state["manual_supabase_url"] = st.text_input("Supabase URL", value=st.session_state.get("manual_supabase_url", ""))
+        st.session_state["manual_supabase_key"] = st.text_input("Supabase Key (Secret)", type="password", value=st.session_state.get("manual_supabase_key", ""))
+        if st.button("🔌 Connect Supabase"):
+            st.rerun()
+    
     if st.button("🔄 Reset / 重置"):
         st.session_state.messages = []; st.session_state.blueprint = None; st.session_state.conversation_phase = "clarifying"; st.rerun()
+    
     st.markdown("---")
     st.subheader("📚 Recent Projects")
-    for p in fetch_recent_projects():
-        st.markdown(f"<div class='history-item'><div class='history-title'>{p.get('project_name')}</div><div class='history-date'>{p.get('created_at')[:16]}</div></div>", unsafe_allow_html=True)
+    projects = fetch_recent_projects()
+    if projects:
+        for p in projects:
+            st.markdown(f"<div class='history-item'><div class='history-title'>{p.get('project_name')}</div><div class='history-date'>{p.get('created_at')[:16]}</div></div>", unsafe_allow_html=True)
+    else:
+        st.caption("No projects found or connection offline.")
 
 st.title("灵识 · Socratic Venture Builder")
 if st.session_state.conversation_phase == "clarifying":

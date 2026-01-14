@@ -2,4 +2,4 @@ streamlit
 openai
 instructor
 pydantic
-st-supabase-connection
+supabase

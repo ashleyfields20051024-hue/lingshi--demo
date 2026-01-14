@@ -3,6 +3,9 @@ import openai
 import instructor
 from pydantic import BaseModel, Field
 from typing import List
+import json
+from datetime import datetime
+from st_supabase_connection import SupabaseConnection, execute_query
 
 # ==========================================
 # 1. 界面配置 & 太阳朋克 CSS
@@ -23,11 +26,31 @@ st.markdown("""
     /* 蓝图卡片样式增强 */
     .blueprint-header { color: #1B5E20; font-family: 'Georgia', serif; border-bottom: 2px solid #D4AF37; padding-bottom: 10px; margin-bottom: 15px; }
     .tech-pill { display: inline-block; background: #263238; color: #80CBC4; padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 0.9em; margin: 2px; }
+    
+    /* 历史记录样式 */
+    .history-item { background: white; padding: 8px; margin: 5px 0; border-radius: 4px; border-left: 3px solid #D4AF37; }
+    .history-title { font-weight: bold; color: #1B5E20; }
+    .history-date { font-size: 0.8em; color: #666; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 深度架构模型 (解决文档太简略的问题)
+# 2. Supabase 连接初始化
+# ==========================================
+@st.cache_resource
+def init_supabase():
+    """Initialize Supabase connection"""
+    return st.connection(
+        name="supabase",
+        type=SupabaseConnection,
+        url="https://lgyxnnpkdimokcwckmvm.supabase.co",
+        key="sb_publishable_9wb6_CaPZgyWjpMNw_sQqg_iRpvlyos"
+    )
+
+supabase = init_supabase()
+
+# ==========================================
+# 3. 深度架构模型 (解决文档太简略的问题)
 # ==========================================
 class EngineeringSpec(BaseModel):
     project_name: str = Field(..., description="Project Name (Creative & Catchy)")
@@ -45,7 +68,7 @@ class EngineeringSpec(BaseModel):
     estimated_budget: str = Field(..., description="Time & Cost estimation.")
 
 # ==========================================
-# 3. 智能引擎 (支持双语)
+# 4. 智能引擎 (支持双语)
 # ==========================================
 
 def get_system_prompt(language_mode):
@@ -63,7 +86,7 @@ def get_system_prompt(language_mode):
         """
     else:
         return """
-        你是‘灵识’，一个务实的技术产品经理。
+        你是'灵识'，一个务实的技术产品经理。
         目标：将用户的观察转化为技术需求。
         行为：
         1. 拒绝煽情，关注业务逻辑、频率、现有替代方案。
@@ -116,7 +139,55 @@ def generate_blueprint(history, api_key, language_mode):
     )
 
 # ==========================================
-# 4. 界面逻辑
+# 5. Supabase 数据库操作
+# ==========================================
+
+def save_blueprint_to_supabase(blueprint: EngineeringSpec, messages: List[dict], language_mode: str):
+    """Save blueprint to Supabase problem_assets table"""
+    try:
+        # 提取最后一条用户消息作为 raw_user_input
+        user_messages = [msg["content"] for msg in messages if msg["role"] == "user"]
+        raw_user_input = user_messages[-1] if user_messages else "N/A"
+        
+        # 准备数据
+        data = {
+            "project_name": blueprint.project_name,
+            "one_liner": blueprint.one_liner,
+            "full_blueprint": blueprint.model_dump_json(),
+            "raw_user_input": raw_user_input,
+            "conversation_log": json.dumps(messages, ensure_ascii=False),
+            "language_mode": language_mode,
+            "created_at": datetime.utcnow().isoformat()
+        }
+        
+        # 插入数据
+        response = execute_query(
+            supabase.table("problem_assets").insert(data),
+            ttl=0
+        )
+        
+        return True
+    except Exception as e:
+        st.error(f"保存失败: {str(e)}")
+        return False
+
+def fetch_recent_projects(limit=5):
+    """Fetch recent projects from Supabase"""
+    try:
+        response = execute_query(
+            supabase.table("problem_assets")
+            .select("project_name, created_at")
+            .order("created_at", desc=True)
+            .limit(limit),
+            ttl=0
+        )
+        return response.data if response.data else []
+    except Exception as e:
+        st.error(f"加载历史记录失败: {str(e)}")
+        return []
+
+# ==========================================
+# 6. 界面逻辑
 # ==========================================
 
 # 初始化
@@ -162,6 +233,34 @@ with st.sidebar:
         st.session_state.messages = []
         st.session_state.blueprint = None
         st.rerun()
+    
+    st.markdown("---")
+    
+    # === 新增：历史记录仪表板 ===
+    st.subheader("📚 Recent Projects")
+    recent_projects = fetch_recent_projects(5)
+    
+    if recent_projects:
+        for project in recent_projects:
+            # 格式化时间
+            created_at = project.get("created_at", "")
+            if created_at:
+                try:
+                    dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                    formatted_date = dt.strftime("%Y-%m-%d %H:%M")
+                except:
+                    formatted_date = created_at
+            else:
+                formatted_date = "N/A"
+            
+            st.markdown(f"""
+            <div class='history-item'>
+                <div class='history-title'>{project.get('project_name', 'Untitled')}</div>
+                <div class='history-date'>{formatted_date}</div>
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.info("暂无历史记录")
 
 # --- 主区域 ---
 st.title("灵识 · Venture Builder Agent")
@@ -210,6 +309,13 @@ with col_blue:
                 try:
                     bp = generate_blueprint(st.session_state.messages, api_key, language_mode)
                     st.session_state.blueprint = bp
+                    
+                    # === 新增：自动保存到 Supabase ===
+                    if st.session_state.blueprint is not None:
+                        if save_blueprint_to_supabase(bp, st.session_state.messages, language_mode):
+                            st.toast("✅ Asset Minted & Saved on Protocol!")
+                            st.rerun()  # 刷新侧边栏历史记录
+                        
                 except Exception as e:
                     st.error(str(e))
 

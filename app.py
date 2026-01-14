@@ -39,12 +39,10 @@ st.markdown("""
 # ==========================================
 @st.cache_resource
 def init_supabase():
-    """Initialize Supabase connection"""
+    """Initialize Supabase connection using Streamlit Secrets"""
     return st.connection(
         name="supabase",
-        type=SupabaseConnection,
-        url="https://lgyxnnpkdimokcwckmvm.supabase.co",
-        key="sb_publishable_9wb6_CaPZgyWjpMNw_sQqg_iRpvlyos"
+        type=SupabaseConnection
     )
 
 supabase = init_supabase()

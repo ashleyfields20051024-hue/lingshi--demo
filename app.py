@@ -63,7 +63,14 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. Supabase Connection (Robust SDK)
+# 2. Internationalization (i18n)
+# ==========================================
+def t(en_text, zh_text):
+    """Translation helper based on selected language"""
+    return zh_text if "Chinese" in st.session_state.get("language_mode", "Chinese") else en_text
+
+# ==========================================
+# 3. Supabase Connection (Robust SDK)
 # ==========================================
 def get_supabase_client():
     """Get Supabase client from secrets or session state fallback"""
@@ -83,7 +90,7 @@ def get_supabase_client():
 supabase = get_supabase_client()
 
 # ==========================================
-# 3. Engineering Models
+# 4. Engineering Models
 # ==========================================
 class EngineeringSpec(BaseModel):
     project_name: str = Field(..., description="Project Name (Creative & Catchy)")
@@ -95,7 +102,7 @@ class EngineeringSpec(BaseModel):
     estimated_budget: str = Field(..., description="Time & Cost estimation.")
 
 # ==========================================
-# 4. Socratic Engine (Robust State Machine)
+# 5. Socratic Engine (Robust State Machine)
 # ==========================================
 STATE_TOKEN = "[STATE: ALIGNED]"
 
@@ -108,7 +115,7 @@ def get_system_prompt(phase, language_mode):
     
     if phase == "clarifying":
         instruction = (
-            "\n\nPHASE: AMBIGUITY CHECK.\n"
+            f"\n\nPHASE: AMBIGUITY CHECK.\n"
             "1. Analyze if the user's problem description is specific enough for engineering.\n"
             "2. If vague, REFUSE to provide a solution. Instead, ask 2-3 targeted multiple-choice questions.\n"
             "3. ONLY when you have sufficient information, append the exact token '{STATE_TOKEN}' at the very end of your message."
@@ -147,9 +154,9 @@ def generate_blueprint(history, api_key, language_mode):
     return client.chat.completions.create(model="deepseek-chat", response_model=EngineeringSpec, messages=messages)
 
 # ==========================================
-# 5. Database Operations (History Restoration)
+# 6. Database Operations (History Restoration)
 # ==========================================
-def save_blueprint_to_supabase(blueprint: EngineeringSpec, messages: List[dict]):
+def save_blueprint_to_supabase(blueprint: EngineeringSpec, messages: List[dict], language_mode: str):
     if not supabase: return False
     try:
         user_messages = [msg["content"] for msg in messages if msg["role"] == "user"]
@@ -160,7 +167,7 @@ def save_blueprint_to_supabase(blueprint: EngineeringSpec, messages: List[dict])
             "full_blueprint": blueprint.model_dump_json(),
             "raw_user_input": raw_user_input,
             "conversation_log": json.dumps(messages, ensure_ascii=False),
-            "language_mode": "English",
+            "language_mode": language_mode,
             "created_at": datetime.utcnow().isoformat()
         }
         supabase.table("problem_assets").insert(data).execute()
@@ -172,18 +179,18 @@ def save_blueprint_to_supabase(blueprint: EngineeringSpec, messages: List[dict])
 def fetch_recent_projects(limit=10):
     if not supabase: return []
     try:
-        # Fetch all columns for restoration
         response = supabase.table("problem_assets").select("*").order("created_at", desc=True).limit(limit).execute()
         return response.data if response.data else []
     except:
         return []
 
 # ==========================================
-# 6. Session State & Callbacks
+# 7. Session State & Callbacks
 # ==========================================
 if "messages" not in st.session_state: st.session_state.messages = []
 if "blueprint" not in st.session_state: st.session_state.blueprint = None
 if "conversation_phase" not in st.session_state: st.session_state.conversation_phase = "clarifying"
+if "language_mode" not in st.session_state: st.session_state.language_mode = "Chinese (中文模式)"
 
 def restore_project(project_data):
     """Callback to restore state from history"""
@@ -192,35 +199,42 @@ def restore_project(project_data):
         blueprint_json = json.loads(project_data["full_blueprint"])
         st.session_state.blueprint = EngineeringSpec(**blueprint_json)
         st.session_state.conversation_phase = "aligned"
-        st.toast(f"⏪ Restored: {project_data['project_name']}")
+        st.session_state.language_mode = project_data.get("language_mode", "Chinese (中文模式)")
+        st.toast(f"⏪ {t('Restored', '已恢复')}: {project_data['project_name']}")
     except Exception as e:
         st.error(f"Restoration failed: {str(e)}")
 
 # ==========================================
-# 7. Sidebar (Interactive History)
+# 8. Sidebar (Interactive History)
 # ==========================================
 with st.sidebar:
-    st.title("🛡️ Lingshi Protocol")
-    st.caption("v4.2 Robust MATS Edition")
-    language_mode = st.radio("Interface Language", ["Chinese (中文模式)", "English for Investors"])
+    st.title(t("🛡️ Lingshi Protocol", "🛡️ 灵识协议"))
+    st.caption(f"v4.2 {t('Robust MATS Edition', '稳健 MATS 版')}")
+    
+    # Language Toggle
+    st.session_state.language_mode = st.radio(
+        t("Interface Language", "界面语言"), 
+        ["Chinese (中文模式)", "English for Investors"],
+        index=0 if "Chinese" in st.session_state.language_mode else 1
+    )
     st.markdown("---")
     
     # API Key
     api_key = st.secrets.get("DEEPSEEK_API_KEY", "")
-    if not api_key: api_key = st.text_input("DeepSeek Key", type="password")
+    if not api_key: api_key = st.text_input(t("DeepSeek Key", "DeepSeek 密钥"), type="password")
     
     # Supabase Fallback
     if not supabase:
-        st.warning("🔑 Supabase Offline")
+        st.warning(t("🔑 Supabase Offline", "🔑 Supabase 离线"))
         st.session_state["manual_supabase_url"] = st.text_input("URL", value=st.session_state.get("manual_supabase_url", ""))
-        st.session_state["manual_supabase_key"] = st.text_input("Key", type="password", value=st.session_state.get("manual_supabase_key", ""))
-        if st.button("🔌 Connect"): st.rerun()
+        st.session_state["manual_supabase_key"] = st.text_input(t("Key", "密钥"), type="password", value=st.session_state.get("manual_supabase_key", ""))
+        if st.button(t("🔌 Connect", "🔌 连接")): st.rerun()
     
-    if st.button("🔄 New Session", use_container_width=True):
+    if st.button(t("🔄 New Session", "🔄 开启新会话"), use_container_width=True):
         st.session_state.messages = []; st.session_state.blueprint = None; st.session_state.conversation_phase = "clarifying"; st.rerun()
     
     st.markdown("---")
-    st.subheader("⏪ Time Travel (History)")
+    st.subheader(t("⏪ Time Travel (History)", "⏪ 时间旅行 (历史记录)"))
     projects = fetch_recent_projects()
     if projects:
         for p in projects:
@@ -229,33 +243,33 @@ with st.sidebar:
                 restore_project(p)
                 st.rerun()
     else:
-        st.caption("No history found.")
+        st.caption(t("No history found.", "暂无历史记录。"))
 
 # ==========================================
-# 8. Main Interface
+# 9. Main Interface
 # ==========================================
-st.title("Socratic Venture Builder")
-st.caption("AI Safety Mode: Enforcing Constraint Alignment before Engineering.")
+st.title(t("Socratic Venture Builder", "苏格拉底式创业构建器"))
+st.caption(t("AI Safety Mode: Enforcing Constraint Alignment before Engineering.", "AI 安全模式：在工程构建前强制执行约束对齐。"))
 
 # Phase Indicator
 if st.session_state.conversation_phase == "clarifying":
-    st.markdown('<div class="phase-badge phase-clarifying">⚠️ Clarifying Constraints</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="phase-badge phase-clarifying">⚠️ {t("Clarifying Constraints", "约束澄清中")}</div>', unsafe_allow_html=True)
 else:
-    st.markdown('<div class="phase-badge phase-aligned">✅ Constraints Aligned</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="phase-badge phase-aligned">✅ {t("Constraints Aligned", "约束已对齐")}</div>', unsafe_allow_html=True)
 
 col_chat, col_blue = st.columns([3, 2], gap="large")
 
 with col_chat:
     # Chat History
     if not st.session_state.messages:
-        welcome_msg = "你好，我是灵识。请描述你观察到的问题或想要构建的系统。" if "Chinese" in language_mode else "Hello, I am Lingshi. Please describe the problem or system you wish to architect."
+        welcome_msg = t("Hello, I am Lingshi. Please describe the problem or system you wish to architect.", "你好，我是灵识。请描述你观察到的问题或想要构建的系统。")
         st.session_state.messages.append({"role": "assistant", "content": welcome_msg})
     
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]): st.markdown(msg["content"])
     
     # Chat Input
-    if prompt := st.chat_input("Input observation..."):
+    if prompt := st.chat_input(t("Input observation...", "输入观察到的问题...")):
         st.session_state.messages.append({"role": "user", "content": prompt})
         st.rerun()
 
@@ -263,34 +277,34 @@ with col_chat:
     if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
         if api_key:
             with st.chat_message("assistant"):
-                with st.spinner("Analyzing constraints..." if "English" in language_mode else "正在分析约束..."):
-                    resp, next_phase = get_chat_response(st.session_state.messages, api_key, st.session_state.conversation_phase, language_mode)
+                with st.spinner(t("Analyzing constraints...", "正在分析约束...")):
+                    resp, next_phase = get_chat_response(st.session_state.messages, api_key, st.session_state.conversation_phase, st.session_state.language_mode)
                     st.markdown(resp)
                     st.session_state.messages.append({"role": "assistant", "content": resp})
                     if next_phase != st.session_state.conversation_phase:
                         st.session_state.conversation_phase = next_phase
                         st.rerun()
         else:
-            st.error("Please provide a DeepSeek API Key in the sidebar.")
+            st.error(t("Please provide a DeepSeek API Key in the sidebar.", "请在侧边栏提供 DeepSeek API 密钥。"))
 
 with col_blue:
     # Generation Logic
     if st.session_state.conversation_phase != "aligned":
-        st.button("✨ Generate Blueprint", disabled=True, use_container_width=True)
-        st.info("💡 AI is currently eliciting constraints. Answer the questions to proceed.")
+        st.button(t("✨ Generate Blueprint", "✨ 生成工程蓝图"), disabled=True, use_container_width=True)
+        st.info(t("💡 AI is currently eliciting constraints. Answer the questions to proceed.", "💡 AI 正在引导约束对齐。请回答问题以继续。"))
         
         # Force Override Button
-        if st.button("⚠️ Skip Questions & Force Generate", use_container_width=True, help="Bypass the Socratic loop if the AI is stuck."):
+        if st.button(t("⚠️ Skip Questions & Force Generate", "⚠️ 跳过提问并强制生成"), use_container_width=True, help=t("Bypass the Socratic loop if the AI is stuck.", "如果 AI 陷入循环，可跳过苏格拉底环节。")):
             st.session_state.conversation_phase = "aligned"
             st.rerun()
     else:
-        if st.button("✨ Generate Blueprint", type="primary", use_container_width=True):
-            with st.spinner("Architecting solution..." if "English" in language_mode else "正在构建方案..."):
+        if st.button(t("✨ Generate Blueprint", "✨ 生成工程蓝图"), type="primary", use_container_width=True):
+            with st.spinner(t("Architecting solution...", "正在构建方案...")):
                 try:
-                    bp = generate_blueprint(st.session_state.messages, api_key, language_mode)
+                    bp = generate_blueprint(st.session_state.messages, api_key, st.session_state.language_mode)
                     st.session_state.blueprint = bp
-                    if save_blueprint_to_supabase(bp, st.session_state.messages):
-                        st.toast("✅ Asset Minted & Saved on Protocol!")
+                    if save_blueprint_to_supabase(bp, st.session_state.messages, st.session_state.language_mode):
+                        st.toast(t("✅ Asset Minted & Saved on Protocol!", "✅ 资产已铸造并保存至协议！"))
                         st.rerun()
                 except Exception as e:
                     st.error(f"Generation failed: {str(e)}")
@@ -304,17 +318,17 @@ with col_blue:
                 <div class="blueprint-header">🚀 {b.project_name}</div>
                 <p style="font-style: italic; color: #666;">{b.one_liner}</p>
                 <div style="background: #fff; padding: 15px; border-left: 4px solid #000; margin: 15px 0;">
-                    <strong>Architecture Logic:</strong><br>{b.architecture_logic}
+                    <strong>{t('Architecture Logic:', '架构逻辑：')}</strong><br>{b.architecture_logic}
                 </div>
-                <strong>Implementation Steps:</strong>
+                <strong>{t('Implementation Steps:', '实施步骤：')}</strong>
                 <ol>
                     {"".join([f"<li>{step}</li>" for step in b.implementation_steps])}
                 </ol>
-                <strong>Critical Risk:</strong>
+                <strong>{t('Critical Risk:', '核心风险：')}</strong>
                 <p style="color: #d93025;">{b.critical_risks}</p>
-                <strong>Tech Stack:</strong><br>
+                <strong>{t('Tech Stack:', '技术栈：')}</strong><br>
                 {"".join([f"<span class='tech-pill'>{item}</span>" for item in b.core_tech_stack])}
                 <br><br>
-                <small>Est. Budget: {b.estimated_budget}</small>
+                <small>{t('Est. Budget:', '预估预算：')} {b.estimated_budget}</small>
             </div>
             """, unsafe_allow_html=True)

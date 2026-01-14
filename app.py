@@ -31,6 +31,18 @@ st.markdown("""
     .history-item { background: white; padding: 8px; margin: 5px 0; border-radius: 4px; border-left: 3px solid #D4AF37; }
     .history-title { font-weight: bold; color: #1B5E20; }
     .history-date { font-size: 0.8em; color: #666; }
+    
+    /* 状态标签样式 */
+    .phase-badge {
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.85em;
+        font-weight: bold;
+        display: inline-block;
+        margin-bottom: 10px;
+    }
+    .phase-clarifying { background-color: #FFF3E0; color: #E65100; border: 1px solid #FFE0B2; }
+    .phase-aligned { background-color: #E8F5E9; color: #2E7D32; border: 1px solid #C8E6C9; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -48,53 +60,72 @@ def init_supabase():
 supabase = init_supabase()
 
 # ==========================================
-# 3. 深度架构模型 (解决文档太简略的问题)
+# 3. 深度架构模型
 # ==========================================
 class EngineeringSpec(BaseModel):
     project_name: str = Field(..., description="Project Name (Creative & Catchy)")
     one_liner: str = Field(..., description="A single sentence explaining the value prop.")
-    
-    # 核心升级：增加实施步骤
     architecture_logic: str = Field(..., description="Explain the system data flow clearly.")
-    implementation_steps: List[str] = Field(..., description="5 concrete steps to build the MVP (Step 1, Step 2...).")
-    
-    core_tech_stack: List[str] = Field(..., description="Specific libraries/tools (e.g., PyTorch, React, AWS Lambda).")
-    
-    # 核心升级：增加风险分析
+    implementation_steps: List[str] = Field(..., description="5 concrete steps to build the MVP.")
+    core_tech_stack: List[str] = Field(..., description="Specific libraries/tools.")
     critical_risks: str = Field(..., description="What is the biggest technical bottleneck?")
-    
     estimated_budget: str = Field(..., description="Time & Cost estimation.")
 
 # ==========================================
-# 4. 智能引擎 (支持双语)
+# 4. 智能引擎 (Socratic State Machine)
 # ==========================================
 
-def get_system_prompt(language_mode):
+def get_system_prompt(language_mode, phase):
     if language_mode == "English for Investors":
-        return """
-        You are 'Lingshi' (Spirit & Insight), a Venture Builder AI.
-        
-        **CRITICAL RULE**: No matter what language the user speaks, you MUST reply and ask questions in **ENGLISH**.
-        
-        Your Goal: Turn the user's raw field notes into a high-level technical product spec.
-        Behavior:
-        1. Act like a pragmatic Product Manager.
-        2. Ask clarifying questions about logic, frequency, and current workarounds.
-        3. Do NOT talk about feelings. Talk about SYSTEMS.
+        base_prompt = """
+        You are 'Lingshi' (Spirit & Insight), a Venture Builder AI focused on AI Safety and Engineering Precision.
+        **CRITICAL RULE**: Reply and ask questions in **ENGLISH**.
         """
     else:
-        return """
-        你是'灵识'，一个务实的技术产品经理。
-        目标：将用户的观察转化为技术需求。
-        行为：
-        1. 拒绝煽情，关注业务逻辑、频率、现有替代方案。
-        2. 每次只问一个核心问题。
+        base_prompt = """
+        你是'灵识'，一个专注于 AI 安全和工程精准度的技术产品经理。
         """
 
-def get_chat_response(history, api_key, language_mode):
+    if phase == "clarifying":
+        if language_mode == "English for Investors":
+            return base_prompt + """
+            **PHASE: AMBIGUITY CHECK (The Guardrail)**
+            Your Goal: Analyze if the user's problem description is specific enough to build an engineering spec.
+            Behavior:
+            1. If the input is vague, REFUSE to offer a solution.
+            2. Instead, generate 2-3 specific, multiple-choice questions to clarify constraints (e.g., scale, frequency, technical environment).
+            3. Do NOT talk about feelings. Talk about SYSTEMS.
+            4. When you feel you have enough information, you MUST end your message with the exact phrase: "Constraints Aligned."
+            """
+        else:
+            return base_prompt + """
+            **阶段：歧义检查（护栏）**
+            目标：分析用户的描述是否足够具体以构建工程规格。
+            行为：
+            1. 如果输入模糊，拒绝提供解决方案。
+            2. 生成 2-3 个具体的选择题来澄清约束（例如：频率、规模、现有环境）。
+            3. 每次只关注系统逻辑。
+            4. 当你认为信息足够时，必须在回复末尾加上： "Constraints Aligned."
+            """
+    else:
+        # Aligned phase
+        if language_mode == "English for Investors":
+            return base_prompt + """
+            **PHASE: ALIGNMENT REACHED**
+            The constraints are clear. You are now ready to help the user generate the final blueprint.
+            Acknowledge the alignment and wait for the user to trigger the generation.
+            """
+        else:
+            return base_prompt + """
+            **阶段：对齐完成**
+            约束已明确。你现在准备好帮助用户生成最终蓝图。
+            确认对齐并等待用户触发生成。
+            """
+
+def get_chat_response(history, api_key, language_mode, current_phase):
     client = openai.OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
     
-    sys_prompt = get_system_prompt(language_mode)
+    sys_prompt = get_system_prompt(language_mode, current_phase)
     messages = [{"role": "system", "content": sys_prompt}]
     
     for msg in history:
@@ -103,9 +134,16 @@ def get_chat_response(history, api_key, language_mode):
     response = client.chat.completions.create(
         model="deepseek-chat",
         messages=messages,
-        temperature=0.5
+        temperature=0.3 # Lower temperature for more precise elicitation
     )
-    return response.choices[0].message.content
+    content = response.choices[0].message.content
+    
+    # Check for phase transition
+    new_phase = current_phase
+    if "Constraints Aligned" in content:
+        new_phase = "aligned"
+        
+    return content, new_phase
 
 def generate_blueprint(history, api_key, language_mode):
     client = instructor.from_openai(
@@ -113,17 +151,11 @@ def generate_blueprint(history, api_key, language_mode):
         mode=instructor.Mode.JSON
     )
     
-    # 强制蓝图无论如何都用英文生成（如果选了英文模式）
     lang_instruction = "Output MUST be in ENGLISH." if language_mode == "English for Investors" else "输出中文。"
     
     system_prompt = f"""
-    You are the Engineering Brain of Lingshi. Generate a deep, detailed technical blueprint.
+    You are the Engineering Brain of Lingshi. Generate a deep, detailed technical blueprint based on the ALIGNED constraints.
     {lang_instruction}
-    
-    Requirements:
-    1. 'implementation_steps' must be detailed (e.g., 'Step 1: Scrape data using Selenium...').
-    2. 'architecture_logic' should describe how data moves.
-    3. Be specific about tech stack (naming specific libraries).
     """
     
     messages = [{"role": "system", "content": system_prompt}]
@@ -141,13 +173,10 @@ def generate_blueprint(history, api_key, language_mode):
 # ==========================================
 
 def save_blueprint_to_supabase(blueprint: EngineeringSpec, messages: List[dict], language_mode: str):
-    """Save blueprint to Supabase problem_assets table"""
     try:
-        # 提取最后一条用户消息作为 raw_user_input
         user_messages = [msg["content"] for msg in messages if msg["role"] == "user"]
         raw_user_input = user_messages[-1] if user_messages else "N/A"
         
-        # 准备数据
         data = {
             "project_name": blueprint.project_name,
             "one_liner": blueprint.one_liner,
@@ -158,19 +187,13 @@ def save_blueprint_to_supabase(blueprint: EngineeringSpec, messages: List[dict],
             "created_at": datetime.utcnow().isoformat()
         }
         
-        # 插入数据
-        response = execute_query(
-            supabase.table("problem_assets").insert(data),
-            ttl=0
-        )
-        
+        execute_query(supabase.table("problem_assets").insert(data), ttl=0)
         return True
     except Exception as e:
         st.error(f"保存失败: {str(e)}")
         return False
 
 def fetch_recent_projects(limit=5):
-    """Fetch recent projects from Supabase"""
     try:
         response = execute_query(
             supabase.table("problem_assets")
@@ -193,12 +216,13 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "blueprint" not in st.session_state:
     st.session_state.blueprint = None
+if "conversation_phase" not in st.session_state:
+    st.session_state.conversation_phase = "clarifying"
 
 # --- 侧边栏 ---
 with st.sidebar:
     st.title("🌿 Lingshi Protocol")
     
-    # 语言切换器
     language_mode = st.radio(
         "Interface Language",
         ["Chinese (中文模式)", "English for Investors"],
@@ -207,144 +231,115 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # === 关键修改：智能兼容模式 ===
-    # 初始化 api_key 为空
     api_key = ""
-    
-    # 1. 尝试从云端/本地秘密里拿 Key (加了 try-except 就不怕报错了)
     try:
         if "DEEPSEEK_API_KEY" in st.secrets:
             api_key = st.secrets["DEEPSEEK_API_KEY"]
-            st.success("✅ License Active (Sponsor Mode)") 
+            st.success("✅ License Active") 
     except Exception:
-        # 如果本地没有配置 secrets.toml，这里会报错，但我们用 pass 跳过，假装无事发生
         pass
 
-    # 2. 如果上面没拿到 Key（说明是在本地，或者云端没配好），显示输入框
     if not api_key:
         api_key = st.text_input("DeepSeek Key", type="password")
-        if not api_key:
-            st.info("请输入 Key 开始使用")
     
-    # 重置按钮
     if st.button("🔄 Reset / 重置"):
         st.session_state.messages = []
         st.session_state.blueprint = None
+        st.session_state.conversation_phase = "clarifying"
         st.rerun()
     
     st.markdown("---")
-    
-    # === 新增：历史记录仪表板 ===
     st.subheader("📚 Recent Projects")
     recent_projects = fetch_recent_projects(5)
-    
     if recent_projects:
         for project in recent_projects:
-            # 格式化时间
-            created_at = project.get("created_at", "")
-            if created_at:
-                try:
-                    dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-                    formatted_date = dt.strftime("%Y-%m-%d %H:%M")
-                except:
-                    formatted_date = created_at
-            else:
-                formatted_date = "N/A"
-            
             st.markdown(f"""
             <div class='history-item'>
                 <div class='history-title'>{project.get('project_name', 'Untitled')}</div>
-                <div class='history-date'>{formatted_date}</div>
+                <div class='history-date'>{project.get('created_at', '')[:16]}</div>
             </div>
             """, unsafe_allow_html=True)
-    else:
-        st.info("暂无历史记录")
 
 # --- 主区域 ---
-st.title("灵识 · Venture Builder Agent")
-if language_mode == "English for Investors":
-    st.caption("Translating Tacit Knowledge into Engineering Assets.")
+st.title("灵识 · Socratic Venture Builder")
+st.caption("AI Safety Mode: Enforcing Constraint Alignment before Engineering.")
+
+# 状态指示器
+if st.session_state.conversation_phase == "clarifying":
+    st.markdown('<div class="phase-badge phase-clarifying">⚠️ Clarifying Constraints</div>', unsafe_allow_html=True)
 else:
-    st.caption("从田野笔记到工程蓝图")
+    st.markdown('<div class="phase-badge phase-aligned">✅ Constraints Aligned</div>', unsafe_allow_html=True)
 
 col_chat, col_blue = st.columns([3, 2], gap="large")
 
 # 左侧：聊天
 with col_chat:
     if not st.session_state.messages:
-        first_msg = "你好，我是灵识。请告诉我你的发现..." if "Chinese" in language_mode else "Hello, I am Lingshi. Tell me about your field observation..."
+        first_msg = "你好，我是灵识。请描述你观察到的问题，我将协助你进行约束对齐。" if "Chinese" in language_mode else "Hello, I am Lingshi. Describe the problem you observed, and I will help you align constraints."
         st.session_state.messages.append({"role": "assistant", "content": first_msg})
 
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    placeholder = "输入观察..." if "Chinese" in language_mode else "Type your observation here..."
-    if prompt := st.chat_input(placeholder):
+    if prompt := st.chat_input("Input observation..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
             
         if api_key:
             with st.chat_message("assistant"):
-                with st.spinner("Analyzing..."):
-                    # 传入语言模式
-                    resp = get_chat_response(st.session_state.messages, api_key, language_mode)
+                with st.spinner("Analyzing Constraints..."):
+                    resp, next_phase = get_chat_response(
+                        st.session_state.messages, 
+                        api_key, 
+                        language_mode, 
+                        st.session_state.conversation_phase
+                    )
                     st.markdown(resp)
                     st.session_state.messages.append({"role": "assistant", "content": resp})
+                    
+                    if next_phase != st.session_state.conversation_phase:
+                        st.session_state.conversation_phase = next_phase
+                        st.rerun()
 
 # 右侧：蓝图
 with col_blue:
+    is_aligned = st.session_state.conversation_phase == "aligned"
     btn_text = "✨ 生成工程蓝图" if "Chinese" in language_mode else "✨ Generate Blueprint"
     
-    if st.button(btn_text, type="primary", use_container_width=True):
-        if not api_key:
-            st.warning("API Key Required")
-        elif len(st.session_state.messages) < 2:
-            st.warning("Needs more context.")
-        else:
+    # 按钮逻辑：仅在对齐后启用
+    if not is_aligned:
+        st.button(btn_text, disabled=True, help="Need more details. Please answer the clarifying questions first.")
+        st.info("💡 **Why is this disabled?** To ensure AI Safety, we require a clear understanding of system constraints before architecting solutions.")
+    else:
+        if st.button(btn_text, type="primary", use_container_width=True):
             with st.spinner("Architecting..."):
                 try:
                     bp = generate_blueprint(st.session_state.messages, api_key, language_mode)
                     st.session_state.blueprint = bp
-                    
-                    # === 新增：自动保存到 Supabase ===
-                    if st.session_state.blueprint is not None:
-                        if save_blueprint_to_supabase(bp, st.session_state.messages, language_mode):
-                            st.toast("✅ Asset Minted & Saved on Protocol!")
-                            st.rerun()  # 刷新侧边栏历史记录
-                        
+                    if save_blueprint_to_supabase(bp, st.session_state.messages, language_mode):
+                        st.toast("✅ Asset Minted & Saved on Protocol!")
+                        st.rerun()
                 except Exception as e:
                     st.error(str(e))
 
     if st.session_state.blueprint:
         b = st.session_state.blueprint
-        
         with st.container(border=True):
             st.markdown(f"<div class='blueprint-header'>🚀 {b.project_name}</div>", unsafe_allow_html=True)
             st.markdown(f"*{b.one_liner}*")
-            
             st.markdown("---")
-            
-            # 逻辑架构
             st.markdown("**🧠 System Logic:**")
             st.info(b.architecture_logic)
-            
-            # 实施步骤 (这是为了解决'太简略'的问题)
             st.markdown("**📅 Implementation Roadmap:**")
             for i, step in enumerate(b.implementation_steps, 1):
                 st.markdown(f"**{i}.** {step}")
-            
             st.markdown("---")
-            
-            # 技术栈
             st.markdown("**🛠 Tech Stack:**")
             stack_html = "".join([f"<span class='tech-pill'>{item}</span>" for item in b.core_tech_stack])
             st.markdown(stack_html, unsafe_allow_html=True)
-            
             st.markdown("<br>", unsafe_allow_html=True)
-            
-            # 风险与预算
             col1, col2 = st.columns(2)
             with col1:
                 st.markdown("**⚠️ Critical Risk:**")

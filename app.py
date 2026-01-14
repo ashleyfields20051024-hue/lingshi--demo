@@ -51,14 +51,20 @@ st.markdown("""
 # ==========================================
 @st.cache_resource
 def init_supabase():
-    """Initialize Supabase client using official SDK"""
+    """Initialize Supabase client with simplified secret retrieval"""
     try:
-        # 尝试从不同的 Secret 路径读取，确保万无一失
-        url = st.secrets.get("SUPABASE_URL") or st.secrets.get("supabase", {}).get("url") or st.secrets.get("connections", {}).get("supabase", {}).get("url")
-        key = st.secrets.get("SUPABASE_KEY") or st.secrets.get("supabase", {}).get("key") or st.secrets.get("connections", {}).get("supabase", {}).get("key")
+        # 最直接的读取方式
+        url = st.secrets.get("SUPABASE_URL")
+        key = st.secrets.get("SUPABASE_KEY")
         
+        # 备选读取方式 (兼容旧格式)
+        if not url:
+            url = st.secrets.get("supabase", {}).get("url")
+        if not key:
+            key = st.secrets.get("supabase", {}).get("key")
+            
         if not url or not key:
-            st.error("❌ Supabase Credentials Missing in Secrets")
+            st.error(f"❌ Credentials Missing. Found keys: {list(st.secrets.keys())}")
             return None
             
         return create_client(url, key)

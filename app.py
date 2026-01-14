@@ -51,11 +51,16 @@ st.markdown("""
 # ==========================================
 @st.cache_resource
 def init_supabase():
-    """Initialize Supabase connection using Streamlit Secrets"""
-    return st.connection(
-        name="supabase",
-        type=SupabaseConnection
-    )
+    """Initialize Supabase connection using Streamlit Secrets with error handling"""
+    try:
+        conn = st.connection(
+            name="supabase",
+            type=SupabaseConnection
+        )
+        return conn
+    except Exception as e:
+        st.error(f"⚠️ Supabase Connection Error: {str(e)}")
+        return None
 
 supabase = init_supabase()
 
@@ -173,6 +178,9 @@ def generate_blueprint(history, api_key, language_mode):
 # ==========================================
 
 def save_blueprint_to_supabase(blueprint: EngineeringSpec, messages: List[dict], language_mode: str):
+    if supabase is None:
+        st.error("Supabase connection not initialized.")
+        return False
     try:
         user_messages = [msg["content"] for msg in messages if msg["role"] == "user"]
         raw_user_input = user_messages[-1] if user_messages else "N/A"
@@ -194,6 +202,8 @@ def save_blueprint_to_supabase(blueprint: EngineeringSpec, messages: List[dict],
         return False
 
 def fetch_recent_projects(limit=5):
+    if supabase is None:
+        return []
     try:
         response = execute_query(
             supabase.table("problem_assets")
@@ -204,7 +214,7 @@ def fetch_recent_projects(limit=5):
         )
         return response.data if response.data else []
     except Exception as e:
-        st.error(f"加载历史记录失败: {str(e)}")
+        # Silently fail for sidebar history to not disrupt UX
         return []
 
 # ==========================================
